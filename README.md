@@ -5,12 +5,12 @@ ERC-4337 Account Abstraction and how to use it. So I decided to do one myself.
 This is a step-by-step tutorial to the technical implementation of ERC-4337 Account Abstraction
 
 ## 1. What is about
-Overview -> https://medium.com/blockchain-at-usc/deep-dive-into-account-abstraction-and-eip-4337-scaling-ethereum-ux-from-0-to-1-c2e6da49d226
-More content about AA -> https://github.com/4337Mafia/awesome-account-abstraction
+Overview on what ERC-4337 ist about -> [medium blog post](https://medium.com/blockchain-at-usc/deep-dive-into-account-abstraction-and-eip-4337-scaling-ethereum-ux-from-0-to-1-c2e6da49d226)
+More technical content on account abtraction  ->[github](https://github.com/4337Mafia/awesome-account-abstraction)
 
 
 ## 2. How it is implemented
-reference implementation -> https://github.com/eth-infinitism/account-abstraction/tree/main/contracts
+Please find the ERC-4337 reference implementation I'm referring to in this tutorial here on [github](https://github.com/eth-infinitism/account-abstraction/tree/main/contracts)
 
 For me as a developer who has not been in the long history of dicussions about account abstraction which has taken place since 2016, the concept
 and its implementation solves so many issues that is not obvious at first sight which part of the reference implementations serves which goals.
@@ -117,39 +117,27 @@ Now we have seen how the `UserOperation` is validated by the `EntryPoint.sol` co
 
 The `UserOperation` is somehow a pseudo transacation. To avoid Ethereum consensus changes, the creators of ERC-4337 did not attempt to create new transaction types for account-abstracted transactions. Instead, users package up the action they want their account to take in an ABI-encoded struct called a UserOperation: a structure that describes a transaction to be sent on behalf of a user. To avoid confusion, it is not named “transaction”.
 
-Like a transaction, it contains “sender”, “to”, “calldata”, “maxFeePerGas”, “maxPriorityFee”, “signature”, “nonce”
-unlike a transaction, it contains several other fields, described below.
+Like a transaction, it contains 
+
+| Field | Type | Description |
+| sender | address | The account making the operation |
+| to | address | | 
+| nonce | uint256 |	Anti-replay parameter; also used as the salt for first-time account creation |
+| callData | bytes | The data to pass to the sender during the main execution call |
+| maxFeePerGas | uint256 | Maximum fee per gas (similar to EIP-1559 max_fee_per_gas) |
+| maxPriorityFeePerGas | uint256 | Maximum priority fee per gas (similar to EIP-1559 max_priority_fee_per_gas) |
+| signature | bytes | Data passed into the account along with the nonce during the verification step |
+
+Unlike a transaction, it contains several other fields
+
+| Field | Type | Description |
+| initCode | bytes  | The initCode of the account (needed if and only if the account is not yet on-chain and needs to be created) |
+| callGasLimit | uint256 | The amount of gas to allocate the main execution call |
+| verificationGasLimit | uint256 | The amount of gas to allocate for the verification step |
+| preVerificationGas | uint256 | The amount of gas to pay for to compensate the bundler for pre-verification execution and calldata |
+| paymasterAndData | bytes | Address of paymaster sponsoring the transaction, followed by extra data to send to the paymaster (empty for self-sponsored transaction) |
 
 Also, the “nonce” and “signature” fields usage is not defined by the protocol, but by each account implementation 
-
-
-
-
-    /**
-     * Validate user's signature and nonce
-     * the entryPoint will make the call to the recipient only if this validation call returns successfully.
-     * signature failure should be reported by returning SIG_VALIDATION_FAILED (1).
-     * This allows making a "simulation call" without a valid signature
-     * Other failures (e.g. nonce mismatch, or invalid signature format) should still revert to signal failure.
-     *
-     * @dev Must validate caller is the entryPoint.
-     *      Must validate the signature and nonce
-     * @param userOp the operation that is about to be executed.
-     * @param userOpHash hash of the user's request data. can be used as the basis for signature.
-     * @param missingAccountFunds missing funds on the account's deposit in the entrypoint.
-     *      This is the minimum amount to transfer to the sender(entryPoint) to be able to make the call.
-     *      The excess is left as a deposit in the entrypoint, for future calls.
-     *      can be withdrawn anytime using "entryPoint.withdrawTo()"
-     *      In case there is a paymaster in the request (or the current deposit is high enough), this value will be zero.
-     * @return validationData packaged ValidationData structure. use `_packValidationData` and `_unpackValidationData` to encode and decode
-     *      <20-byte> sigAuthorizer - 0 for valid signature, 1 to mark signature failure,
-     *         otherwise, an address of an "authorizer" contract.
-     *      <6-byte> validUntil - last timestamp this operation is valid. 0 for "indefinite"
-     *      <6-byte> validAfter - first timestamp this operation is valid
-     *      If an account doesn't use time-range, it is enough to return SIG_VALIDATION_FAILED value (1) for signature failure.
-     *      Note that the validation code cannot use block.timestamp (or block.number) directly.
-     */
-
 
 
 
