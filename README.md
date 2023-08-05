@@ -8,6 +8,29 @@ This is a step-by-step tutorial to the technical implementation of ERC-4337 Acco
 Overview on what ERC-4337 ist about -> [medium blog post](https://medium.com/blockchain-at-usc/deep-dive-into-account-abstraction-and-eip-4337-scaling-ethereum-ux-from-0-to-1-c2e6da49d226)  
 More technical content on account abtraction  ->[github](https://github.com/4337Mafia/awesome-account-abstraction)  
 
+### 1st idea -> smart contract wallet 
+Externally owned accounts (EOA) managing private keys and signing transactions is not for everyone. It might be helpful for mass adoption to have "managed accounts". This per defintion can only 
+be implemented as a smart contract which we call "smart wallet". Each user needs one individual "smart contract wallet" which holds the assets like ETH, ERC20 or NFTs.
+
+### 2nd idea -> user operations
+Now that I have a "smart (contract) wallet" I would like to do stuff (on chain). For example transfer ETH or some of my assets. Or use another smart contract based service. Means calling one of its functions.
+
+Normally an EOA would send a transaction but as we do not want an . The autors of EIP-4337 describe a user operation as
+```
+UserOperation - a structure that describes a transaction to be sent on behalf of a user. To avoid confusion, it is not named “transaction”.
+Like a transaction, it contains “sender”, “to”, “calldata”, “maxFeePerGas”, “maxPriorityFee”, “signature”, “nonce”
+unlike a transaction, it contains several other fields, described below
+also, the “signature” field usage is not defined by the protocol, but by each account implementation
+```
+The "sender" here is the account contract sending a user operation.
+
+Ok, now we have a wallet which holds our assets and a user operation which describes what we want to do. Now the wallet needs somehow a function to execute the user operation, means something like  
+```
+contract SmartWallet {
+  function executeUserOp(UserOperation userop);
+}
+```
+
 
 ## 2. How it is implemented
 Overview on why it is implemented as it is -> https://www.alchemy.com//blog/account-abstraction  
@@ -19,7 +42,7 @@ For me as a developer who has not been in the long history of dicussions about a
 and its implementation solves so many issues that is not obvious at first sight which part of the reference implementations serves which goals.
 I will try to make it simple at the beginning going into more details step by step.
 
-### Overview
+### Overview on implementation
 So put the Paymaster and Aggregator aside first and start with the most simplest use case:
 
 We have a smart wallet from which we sent a user operation to a bundler node (via RPC). The bundler node then adds the user operation to the alternative
