@@ -2,7 +2,7 @@
 Could not find a good tutorial for those who want to go deeper into the technical details of
 ERC-4337 Account Abstraction and how to use it. So I decided to do one myself.
 
-This is a step-by-step tutorial to the technical implementation of ERC-4337 Account Abstraction
+This is a step-by-step tutorial to understand the technical implementation of ERC-4337 Account Abstraction
 
 ## 1. What is about
 Overview on what ERC-4337 ist about -> [medium blog post](https://medium.com/blockchain-at-usc/deep-dive-into-account-abstraction-and-eip-4337-scaling-ethereum-ux-from-0-to-1-c2e6da49d226)  
@@ -10,27 +10,47 @@ More technical content on account abtraction  ->[github](https://github.com/4337
 
 ### 1st idea -> smart contract wallet 
 Externally owned accounts (EOA) managing private keys and signing transactions is not for everyone. It might be helpful for mass adoption to have "managed accounts". This per defintion can only 
-be implemented as a smart contract which we call "smart wallet". Each user needs one individual "smart contract wallet" which holds the assets like ETH, ERC20 or NFTs.
+be implemented as a smart contract which we call "smart (contract) wallet". Each user needs one individual "smart contract wallet" which holds the assets like ETH, ERC20 or NFTs. In the context of ERC-4337 the "smart (contract) wallet" is called "account".
 
 ### 2nd idea -> user operations
 Now that I have a "smart (contract) wallet" I would like to do stuff (on chain). For example transfer ETH or some of my assets. Or use another smart contract based service. Means calling one of its functions.
 
-Normally an EOA would send a transaction but as we do not want an . The autors of EIP-4337 describe a user operation as
+Normally an EOA would send a transaction but as we do not want an EOA there must be another solution. The authors of EIP-4337 introduced the concept of "user operations" which (similar to a transaction) describes what we want our wallet to do. They define it as:  
 ```
-UserOperation - a structure that describes a transaction to be sent on behalf of a user. To avoid confusion, it is not named “transaction”.
-Like a transaction, it contains “sender”, “to”, “calldata”, “maxFeePerGas”, “maxPriorityFee”, “signature”, “nonce”
-unlike a transaction, it contains several other fields, described below
+UserOperation - a structure that describes a transaction to be sent on behalf of a user.  
+To avoid confusion, it is not named “transaction”.  
+Like a transaction, it contains “sender”, “to”, “calldata”, “maxFeePerGas”, “maxPriorityFee”, “signature”, “nonce”  
+unlike a transaction, it contains several other fields, described below  
 also, the “signature” field usage is not defined by the protocol, but by each account implementation
 ```
 The "sender" here is the account contract sending a user operation.
 
-Ok, now we have a wallet which holds our assets and a user operation which describes what we want to do. Now the wallet needs somehow a function to execute the user operation, means something like  
+Ok, now we have a wallet which holds our assets and a user operation which describes what we want to do. Now the wallet needs somehow a function to execute the user operation, means something like this:   
 ```
 contract SmartWallet {
   function executeUserOp(UserOperation userop);
 }
 ```
+Next question that comes up is: who will call this function if not an EOA?  
 
+### 3rd idea -> from bundler to entry point
+Generally anyone could call the function `executeUserOp` on our wallet account. So this could be another smart contract or EOA holding some ETH and willing to pay for the gas.  
+But nobody would do that just for fun without getting paid. So let's assume that we will pay the caller of `executeUserOp` at the end as part of that function.
+
+The caller executing the `executeUserOp` function on the wallet account is called "bundler" as part of EIP-4337, although this term is a little confusing at this point as the bundler is not  
+yet bundling anything.  
+
+So paying the bundler for executing `executeUserOp` sounds great but how can he be sure to get the money at the end of the transcation when calling a method of an unknown contract?  
+One idea is, that he would first simulate the execution of `executeUserOp` to be sure getting paid at the end. But there are different reasons why simulation might not exactly produce the same result as the actual execution of `executeUserOp` if the wallet account wants to fool the bundler.  
+
+To solve this, the authors of ERC-4337 introduced a trustworthy "man in the middle", the so called "entry point". It's an audited contract which implements a function `handleOp(UserOperation op);`.  The bundler will call this function instead of calling any function of the wallet account directly.
+
+Let's look at the role of the entry point here. The `handleOp` function will do the following:
+- Check if the wallet has enough funds to pay to for execution of `executeUserOp`
+- Call the wallet account’s `executeUserOp` function
+- Send the appropriate amount of ETH to the bundler to pay for the gas
+
+To prevent getting fooled by a malicious wallet account in the same way as the bundler could get fooled, the entry point needs to hold the the gas-payment ETH. So the entry point contract needs to implement  a `deposit` and a `withdraw` function to allow the wallet (or someone on behalf of the wallet) to put ETH into the entry point or take it out later.
 
 ## 2. How it is implemented
 Overview on why it is implemented as it is -> https://www.alchemy.com//blog/account-abstraction  
