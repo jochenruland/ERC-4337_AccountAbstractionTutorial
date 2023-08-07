@@ -28,7 +28,7 @@ The "sender" here is the account contract sending a user operation.
 Ok, now we have a wallet which holds our assets and a user operation which describes what we want to do. Now the wallet needs somehow a function to execute the user operation, means something like this:   
 ```
 contract SmartWallet {
-  function executeUserOp(UserOperation userop);
+  function executeUserOp(UserOperation userOp);
 }
 ```
 Next question that comes up is: who will call this function if not an EOA?  
@@ -43,7 +43,7 @@ yet bundling anything.
 So paying the bundler for executing `executeUserOp` sounds great but how can he be sure to get the money at the end of the transcation when calling a method of an unknown contract?  
 One idea is, that he would first simulate the execution of `executeUserOp` to be sure getting paid at the end. But there are different reasons why simulation might not exactly produce the same result as the actual execution of `executeUserOp` if the wallet account wants to fool the bundler.  
 
-To solve this, the authors of ERC-4337 introduced a trustworthy "man in the middle", the so called "entry point". It's an audited contract which implements a function `handleOp(UserOperation op);`.  The bundler will call this function instead of calling any function of the wallet account directly.
+To solve this, the authors of ERC-4337 introduced a trustworthy "man in the middle", the so called "entry point". It's an audited contract which implements a function `handleOp(UserOperation userOp);`.  The bundler will call this function instead of calling any function of the wallet account directly.
 
 Let's look at the role of the entry point here. The `handleOp` function will do the following:
 - Check if the wallet has enough funds to pay to for execution of `executeUserOp`
@@ -51,6 +51,24 @@ Let's look at the role of the entry point here. The `handleOp` function will do 
 - Send the appropriate amount of ETH to the bundler to pay for the gas
 
 To prevent getting fooled by a malicious wallet account in the same way as the bundler could get fooled, the entry point needs to hold the the gas-payment ETH. So the entry point contract needs to implement  a `deposit` and a `withdraw` function to allow the wallet (or someone on behalf of the wallet) to put ETH into the entry point or take it out later.
+
+Now the bundler and entry point are safe, but the wallet account might get in trouble as anyone can try to execute he wallet's `executeUserOp`. Of course the execution will fail, as the wallet will validate and identify a malicious user operation but at this point it has already to pay for the gas and so someone who wants to fool the wallet can use up all the wallet's gaz money.
+
+How to solve this?
+
+### 4th idea -> seperating validation from execution
+To manage the problem mentioned above, the wallet account needs to distinguish betwenn validation failures and execution failures. If validation fails this is due to the bundler and the wallet owner is not willing to pay for the gas. If exectution fails, this is due to the code defined by the wallet owner in the user operation. It is like a rejected transaction and the wallet owner has to pay for the gas. This is not possible in the way the wallet account's interface is currently setup. We need to seperate validation from execution. 
+
+Let's do that as follows:
+```
+contract Wallet {
+  function validateUserOp(UserOperation userOp);
+  function executeUserOp(UserOperation userOp);
+}
+```
+If `validateUserOp` fails, it simply stops here. No gas money will be payed.
+If it succeeds, set aside ETH from the wallet account's deposit to pay for the maximum amount of gas it might possibly use or reject if the wallet account doesn’t have enough. 
+Than call `executeUserOp`. No matter if this call succeeds or not, in this case it's the wallet account's responibility. So it has to pay the bundler for the gas from the funds set aside before and return the rest to the wallet account's deposit.
 
 ## 2. How it is implemented
 Overview on why it is implemented as it is -> https://www.alchemy.com//blog/account-abstraction  
