@@ -16,13 +16,13 @@ be implemented as a smart contract which we call "smart (contract) wallet". Each
 Now that I have a "smart (contract) wallet" I would like to do stuff (on chain). For example transfer ETH or some of my assets. Or use another smart contract based service. Means calling one of its functions.
 
 Normally an EOA would send a transaction but as we do not want an EOA there must be another solution. The authors of EIP-4337 introduced the concept of "user operations" which (similar to a transaction) describes what we want our wallet to do. They define it as:  
-```
-UserOperation - a structure that describes a transaction to be sent on behalf of a user.  
-To avoid confusion, it is not named “transaction”.  
-Like a transaction, it contains “sender”, “to”, “calldata”, “maxFeePerGas”, “maxPriorityFee”, “signature”, “nonce”  
-unlike a transaction, it contains several other fields, described below  
-also, the “signature” field usage is not defined by the protocol, but by each account implementation
-```
+
+> "UserOperation - a structure that describes a transaction to be sent on behalf of a user.  
+ To avoid confusion, it is not named “transaction”.  
+ Like a transaction, it contains “sender”, “to”, “calldata”, “maxFeePerGas”, “maxPriorityFee”, “signature”, “nonce”  
+ unlike a transaction, it contains several other fields, described below  
+ also, the “signature” field usage is not defined by the protocol, but by each account implementation"
+
 The "sender" here is the account contract sending a user operation.
 
 Ok, now we have a wallet which holds our assets and a user operation which describes what we want to do. Now the wallet needs somehow a function to execute the user operation, means something like this:   
@@ -41,7 +41,7 @@ The caller executing the `executeUserOp` function on the wallet account is calle
 yet bundling anything.  
 
 So paying the bundler for executing `executeUserOp` sounds great but how can he be sure to get the money at the end of the transcation when calling a method of an unknown contract?  
-One idea is, that he would first simulate the execution of `executeUserOp` to be sure getting paid at the end. But there are different reasons why simulation might not exactly produce the same result as the actual execution of `executeUserOp` if the wallet account wants to fool the bundler.  
+One idea is, that he would first simulate the execution of `executeUserOp` to be sure getting paid at the end. But there are different reasons why simulation might not exactly produce the same result as the actual execution of `executeUserOp` if the wallet account wants to fool the bundler. And limiting these possible reasons would be too much of a restriction on the wallet's possible functionalities. 
 
 To solve this, the authors of ERC-4337 introduced a trustworthy "man in the middle", the so called "entry point". It's an audited contract which implements a function `handleOp(UserOperation userOp);`.  The bundler will call this function instead of calling any function of the wallet account directly.
 
@@ -69,6 +69,19 @@ contract Wallet {
 If `validateUserOp` fails, it simply stops here. No gas money will be payed.
 If it succeeds, set aside ETH from the wallet account's deposit to pay for the maximum amount of gas it might possibly use or reject if the wallet account doesn’t have enough. 
 Than call `executeUserOp`. No matter if this call succeeds or not, in this case it's the wallet account's responibility. So it has to pay the bundler for the gas from the funds set aside before and return the rest to the wallet account's deposit.
+
+Although the wallet will not execute `executeUserOp` if `validateUserOp` fails, we should prevent any malicious attacks by only allowing a known entry point contract to call these functions.  
+So the wallet is safe now and it will only pay for gas if the user oepration was initiated on it's behalf (although it could still fail, like any normal transaction can also fail).
+
+But there is still a small issue for the bundler. In case an unauthorized user operation is submitted to the bundler, who tries to execute this operation, it will fail when calling `validateUserOp`. So that's fine. But in this case the bundler still has to pay for the gas and will not be compensated.
+
+### 5th idea -> simulating `validateUserOp`
+We introduced the idea of simulating the execution of a user operation already when introducing the bundler (cf. 3rd idea) but explained that there are different reasons why simulation might not produce the same result as later execution. And limiting these possible reasons would be too much of a restriction on the wallet's possible functionalities. This was when validation and execution were part of one function. Now that we have different functions for each task, it is possible to make restrictions on user operations.
+
+In EIP-4337 the authors define these restrictions as follows:
+> "For this purpose, a UserOperation is not allowed to access any information that might change between simulation and execution, such as current block time, number, hash etc. In addition, a UserOperation is only allowed to access data related to this sender address"
+
+### 6th idea -> wallet account paying for gas
 
 ## 2. How it is implemented
 Overview on why it is implemented as it is -> https://www.alchemy.com//blog/account-abstraction  
