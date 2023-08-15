@@ -82,6 +82,32 @@ In EIP-4337 the authors define these restrictions as follows:
 > "For this purpose, a UserOperation is not allowed to access any information that might change between simulation and execution, such as current block time, number, hash etc. In addition, a UserOperation is only allowed to access data related to this sender address"
 
 ### 6th idea -> wallet account paying for gas
+The fact that the wallet account deposits ETH in the entry point contract was due to the risk that the execution of the user operation would be called but the wallet account would not pay for gas in the end. Now that we have seperated validation and execution, the wallet account can send the funds to the entry point as part of the validation. It will not be possible to simulate the exact amount of Eth to be paid for the later execution, so the entry point will ask for the maximum amount of gas that might possibly be used. The wallet account can withdraw redundant funds later but this avoids that the wallet account has to deposit large amounts prepaid Eth in the entry point.
+
+The entry point will always try to pay for gas from the wallet's deposit and ask for the remaining funds when calling `validateUserOp`.
+
+### 7th idea -> incentivising the bundler
+The bundler will be payed by the wallet account owner via a tip. The amount is defined in the user operation in a field `uint256 maxPriorityFeePerGas`. When calling `handleUserOp` on the entry point contract, the bundler can choose to send a lower `maxPriorityFeePerGas` with the transaction and keep the difference.
+
+### 8th idea -> trusted entry point as singleton 
+Technically all bundlers and all wallets can interact with the same entry point. So this can be one audited contract for the whole system. It only has to know to which wallet account a user operation belongs to. Therefore we add a field `sender` to the user operation defining the address of the wallet account.
+
+### 9th idea -> the bundler starts bundling
+Until now the bundler did not bundle anything. It just executes the user operation by calling `handleUserOp` on the entry point contract. As the entry point contract can act independently from any specific wallet account, the bundler could sent more than one user operation to the entry point with one transaction and safe some gas costs.
+
+So the `handleUserOp` function on the entry point contract just has to take an array of user operations as an argument instead of just one.
+
+The new interface of the entry point will now have a function like this:  
+`function handleOps(UserOperation[] calldata ops) external;`
+
+And the bundler as the name says, is now bundling.
+
+A benefit for the bundler is, that it might be possible to get some extra income through MEV (Maximum Extractable Value) by arranging user operations in a most profitable way. But I will not go into the details of MEV here.
+
+### 10th idea -> similarities to block building nodes
+In many ways, bundlers act quiete similar to block building nodes. Like EOA holder sent transactions in order to get them included in a block, owners of a smart wallet submit user operations off chain to a bundler node to get them into a bundle.
+
+Bundlers can store validated user ops in a memepool and broadcast them to other bundlers. Over time we might expect that bundlers and block builders will bekome the same role.
 
 ## 2. How it is implemented
 Overview on why it is implemented as it is -> https://www.alchemy.com//blog/account-abstraction  
