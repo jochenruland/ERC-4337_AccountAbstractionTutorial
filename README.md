@@ -2,17 +2,20 @@
 Could not find a good tutorial for those who want to go deeper into the technical details of
 ERC-4337 Account Abstraction and how to use it. So I decided to do one myself.
 
-This is a step-by-step tutorial to understand the technical implementation of ERC-4337 Account Abstraction
+This is a step-by-step guide to understand first of all the ideas behind EIP-4337 and then the technical implementation of ERC-4337.
 
-## 1. What is about
-Overview on what ERC-4337 ist about -> [medium blog post](https://medium.com/blockchain-at-usc/deep-dive-into-account-abstraction-and-eip-4337-scaling-ethereum-ux-from-0-to-1-c2e6da49d226)  
-More technical content on account abtraction  ->[github](https://github.com/4337Mafia/awesome-account-abstraction)  
+To get a firt overview what EIP-4337 is about and what it is used for I found this article quiete helpful [medium blog post](https://medium.com/blockchain-at-usc/deep-dive-into-account-abstraction-and-eip-4337-scaling-ethereum-ux-from-0-to-1-c2e6da49d226).
+ 
+But although I understood, why it is there, the reference implementation still was a mystireum to me. To understand it you have to understand the ideas and discussions which have happened over years first.
 
-### 1st idea -> smart contract wallet 
+## 1. The ideas behind ERC-4337
+I found a great tutorial on the ideas and concepts which finally led to ERC-4337 on alchemy by David Philipson [here](https://www.alchemy.com/blog/account-abstraction). I tried to summerize it here before we take a deeper look at the reference implementation.
+
+### 1.1 Smart contract wallet 
 Externally owned accounts (EOA) managing private keys and signing transactions is not for everyone. It might be helpful for mass adoption to have "managed accounts". This per defintion can only 
 be implemented as a smart contract which we call "smart (contract) wallet". Each user needs one individual "smart contract wallet" which holds the assets like ETH, ERC20 or NFTs. In the context of ERC-4337 the "smart (contract) wallet" is called "account".
 
-### 2nd idea -> user operations
+### 1.2 User operations
 Now that I have a "smart (contract) wallet" I would like to do stuff (on chain). For example transfer ETH or some of my assets. Or use another smart contract based service. Means calling one of its functions.
 
 Normally an EOA would send a transaction but as we do not want an EOA there must be another solution. The authors of EIP-4337 introduced the concept of "user operations" which (similar to a transaction) describes what we want our wallet to do. They define it as:  
@@ -33,7 +36,7 @@ contract SmartWallet {
 ```
 Next question that comes up is: who will call this function if not an EOA?  
 
-### 3rd idea -> from bundler to entry point
+### 1.3 From bundler to entry point
 Generally anyone could call the function `executeUserOp` on our wallet account. So this could be another smart contract or EOA holding some ETH and willing to pay for the gas.  
 But nobody would do that just for fun without getting paid. So let's assume that we will pay the caller of `executeUserOp` at the end as part of that function.
 
@@ -56,7 +59,7 @@ Now the bundler and entry point are safe, but the wallet account might get in tr
 
 How to solve this?
 
-### 4th idea -> seperating validation from execution
+### 1.4 Seperating validation from execution
 To manage the problem mentioned above, the wallet account needs to distinguish betwenn validation failures and execution failures. If validation fails this is due to the bundler and the wallet owner is not willing to pay for the gas. If exectution fails, this is due to the code defined by the wallet owner in the user operation. It is like a rejected transaction and the wallet owner has to pay for the gas. This is not possible in the way the wallet account's interface is currently setup. We need to seperate validation from execution. 
 
 Let's do that as follows:
@@ -75,24 +78,38 @@ So the wallet is safe now and it will only pay for gas if the user oepration was
 
 But there is still a small issue for the bundler. In case an unauthorized user operation is submitted to the bundler, who tries to execute this operation, it will fail when calling `validateUserOp`. So that's fine. But in this case the bundler still has to pay for the gas and will not be compensated.
 
-### 5th idea -> simulating `validateUserOp`
+### 1.5 Simulating `validateUserOp`
 We introduced the idea of simulating the execution of a user operation already when introducing the bundler (cf. 3rd idea) but explained that there are different reasons why simulation might not produce the same result as later execution. And limiting these possible reasons would be too much of a restriction on the wallet's possible functionalities. This was when validation and execution were part of one function. Now that we have different functions for each task, it is possible to make restrictions on user operations.
 
 In EIP-4337 the authors define these restrictions as follows:
 > "For this purpose, a UserOperation is not allowed to access any information that might change between simulation and execution, such as current block time, number, hash etc. In addition, a UserOperation is only allowed to access data related to this sender address"
 
-### 6th idea -> wallet account paying for gas
+### 1.6 Wallet account paying for gas
 The fact that the wallet account deposits ETH in the entry point contract was due to the risk that the execution of the user operation would be called but the wallet account would not pay for gas in the end. Now that we have seperated validation and execution, the wallet account can send the funds to the entry point as part of the validation. It will not be possible to simulate the exact amount of Eth to be paid for the later execution, so the entry point will ask for the maximum amount of gas that might possibly be used. The wallet account can withdraw redundant funds later but this avoids that the wallet account has to deposit large amounts prepaid Eth in the entry point.
 
 The entry point will always try to pay for gas from the wallet's deposit and ask for the remaining funds when calling `validateUserOp`.
 
-### 7th idea -> incentivising the bundler
+### 1.7 Incentivising the bundler
 The bundler will be payed by the wallet account owner via a tip. The amount is defined in the user operation in a field `uint256 maxPriorityFeePerGas`. When calling `handleUserOp` on the entry point contract, the bundler can choose to send a lower `maxPriorityFeePerGas` with the transaction and keep the difference.
 
-### 8th idea -> trusted entry point as singleton 
+### 1.8 Trusted entry point as singleton 
 Technically all bundlers and all wallets can interact with the same entry point. So this can be one audited contract for the whole system. It only has to know to which wallet account a user operation belongs to. Therefore we add a field `sender` to the user operation defining the address of the wallet account.
 
-### 9th idea -> the bundler starts bundling
+### 1.9 Executing the user operation via call data
+When seperating validation and exection as part of idea 4, we defined the interface of the wallet account as follows:
+
+```
+contract Wallet {
+  function validateUserOp(UserOperation userOp);
+  function executeUserOp(UserOperation userOp);
+}
+```
+
+But ERC-4337 does not define an `executeUserOp` function. Instead the user operations contains a field `callData` as bytes. The first four bytes of this data will be interpreted as a function selector and the rest as function arguments. The entry point contract will send a call to the wallet account contract using the `callData` field as a parameter. This all happens as part of the `handleUserOp` function once the user operations have been validated. 
+
+This concept allows wallet accounts to define their own interface, and user operations can be used to call any kind of functions defined in the wallet account contract.
+
+### 1.10 The bundler starts bundling
 Until now the bundler did not bundle anything. It just executes the user operation by calling `handleUserOp` on the entry point contract. As the entry point contract can act independently from any specific wallet account, the bundler could sent more than one user operation to the entry point with one transaction and safe some gas costs.
 
 So the `handleUserOp` function on the entry point contract just has to take an array of user operations as an argument instead of just one.
@@ -104,7 +121,7 @@ And the bundler as the name says, is now bundling.
 
 A benefit for the bundler is, that it might be possible to get some extra income through MEV (Maximum Extractable Value) by arranging user operations in a most profitable way. But I will not go into the details of MEV here.
 
-### 10th idea -> similarities to block building nodes
+### 1.11 Similarities to block building nodes
 In many ways, bundlers act quiete similar to block building nodes. Like EOA holder sent transactions in order to get them included in a block, owners of a smart wallet submit user operations off chain to a bundler node to get them into a bundle.
 
 Bundlers can store validated user ops in a memepool and broadcast them to other bundlers. Over time we might expect that bundlers and block builders will bekome the same role.
@@ -253,4 +270,4 @@ https://kriptonio.com/blog/how-to-create-simple-erc4337-smart-wallet/
 
 
 
-
+More technical content on account abtraction  ->[github](https://github.com/4337Mafia/awesome-account-abstraction) 
