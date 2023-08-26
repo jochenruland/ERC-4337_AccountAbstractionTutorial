@@ -8,6 +8,8 @@ To get a firt overview what EIP-4337 is about and what it is used for I found th
  
 But although I understood, why it is there, the reference implementation still was a mystireum to me. To understand it you have to understand the ideas and discussions which have happened over years first.
 
+# Part I: Creating a wallet which does not need to handle private keys 
+
 ## 1. The ideas behind ERC-4337
 I found a great tutorial on the ideas and concepts which finally led to ERC-4337 on alchemy by David Philipson [here](https://www.alchemy.com/blog/account-abstraction). I tried to summerize it here before we take a deeper look at the reference implementation.
 
@@ -126,6 +128,32 @@ In many ways, bundlers act quiete similar to block building nodes. Like EOA hold
 
 Bundlers can store validated user ops in a memepool and broadcast them to other bundlers. Over time we might expect that bundlers and block builders will bekome the same role.
 
+# Part II: let someone else pay for what you want to do -> the paymaster
+## 1. The rational behind paymaster
+We have now found a concept for a wallet which can execute user operations and does not have to manage private keys. But it still has to pay for gas. As the main objective is to make usage of web3 apps easier, this does not solve a lot. Users will still need to find some ether to send it to the wallet, which then can pay for exectution of its user operations.
+
+Maybe we can find a way how someone else pays for gas instead of the user.
+
+### 1.1 The paymaster
+The idea of the paymaster allows that someone other then the wallet pays for gas. For example that could be the one providing the dapp to make the use of it easier for users who do not know how to get some Eth. The paymaster is another smart contract defined in EIP-4337, which is willing to pay for the execution of user operations under certain conditions.
+
+In order to know which paymaster a user operation wants to pay for its gas, we add a field `address paymaster` and a second one `bytes paymasterData`. In this second field we can pass any kind of information for the paymaster to validate if it wants to pay for that specific user operation.
+
+### 1.3 Entry point checking for paymasters
+In order to let the paymaster pay for gas we have to adopt the `handleUserOp` function of the entry point.
+
+So this function will
+1. call `validateUserOp` on the wallet contract
+2. if there is a paymaster defined in the user operation it will call `validatePaymasterOp`
+3. user operations which fail validation are discarded
+4. then call `executeUserOp` for each approved user operation and register the amount of gas needed for exection
+5. if the user operation has a paymaster defined this gas will be paid by the paymaster. Otherwise the wallet will pay for it
+
+### 1.4 The paymasters payment mechanism
+
+
+
+# Part V: Implementation
 ## 2. How it is implemented
 Overview on why it is implemented as it is -> https://www.alchemy.com//blog/account-abstraction  
 
