@@ -57,7 +57,7 @@ Let's look at the role of the entry point here. The `handleOp` function will do 
 
 To prevent getting fooled by a malicious wallet account in the same way as the bundler could get fooled, the entry point needs to hold the the gas-payment ETH. So the entry point contract needs to implement  a `deposit` and a `withdraw` function to allow the wallet (or someone on behalf of the wallet) to put ETH into the entry point or take it out later.
 
-Now the bundler and entry point are safe, but the wallet account might get in trouble as anyone can try to execute he wallet's `executeUserOp`. Of course the execution will fail, as the wallet will validate and identify a malicious user operation but at this point it has already to pay for the gas and so someone who wants to fool the wallet can use up all the wallet's gaz money.
+Now the bundler and entry point are safe, but the wallet account might get in trouble as anyone can try to execute he wallet's `executeUserOp`. Of course the execution will fail, as the wallet will validate and identify a malicious user operation but at this point it has already paid for the gas and so someone who wants to fool the wallet can use up all the wallet's gaz money.
 
 How to solve this?
 
@@ -139,6 +139,8 @@ The idea of the paymaster allows that someone other then the wallet pays for gas
 
 In order to know which paymaster a user operation wants to pay for its gas, we add a field `address paymaster` and a second one `bytes paymasterData`. In this second field we can pass any kind of information for the paymaster to validate if it wants to pay for that specific user operation.
 
+In the EIP-4337 specification these two information are bundled into one field `bytes paymasterAndData` as an optimization. The first 20 bytes define the paymasters address and the rest contains the arbitrary information.
+
 ### 1.3 Entry point checking for paymasters
 In order to let the paymaster pay for gas we have to adopt the `handleUserOp` function of the entry point.
 
@@ -149,7 +151,73 @@ So this function will
 4. then call `executeUserOp` for each approved user operation and register the amount of gas needed for exection
 5. if the user operation has a paymaster defined this gas will be paid by the paymaster. Otherwise the wallet will pay for it
 
-### 1.4 The paymasters payment mechanism
+Just like a smart wallet account, a paymaster will also put some Eth into the entry point contract using its `deposit` function.
+
+### 1.4 How the bundler avoids to be cheated by a malicious paymaster
+It comes back to the same problem for the bundler as described with regard to the wallet account. You remember? In case an unauthorized user operation is submitted to the bundler, who tries to execute this operation, it will fail when calling `validateUserOp`. So that's fine. But in this case the bundler still has to pay for the gas and will not be compensated.
+
+With regard to the `validateUserOp` function we made restrictions that a user operation is only allowed to address its sender's storage.
+
+But that does not match with the idea of a paymaster which per definition is there to pay for user operations from different owners, means different sender addresses. So it shares storage accross all user operations in a bundle using the same paymaster.
+
+A malicious paymaster could DoS the system. More on this kind of attack you can find [here](https://blog.finxter.com/denial-of-service-dos-attack-on-smart-contracts/).
+
+So, how to protect against malicious paymasters?
+
+The first concept is a reputation system where bundlers register how often a paymaster has failed validation and ban paymasters that fail a lot. This kind of system could still be bypassed if a malicious paymaster creates many instances of itself (a Sybil attack).
+
+To restrict this second type of attack surface the authers of EIP-4337 defined that paymasters have to stake ETH. Therefore we need staking functions as part of the entry point contract.
+
+```
+contract EntryPoint {
+  // ...
+
+  function addStake() payable;
+  function unlockStake();
+  function withdrawStake(address payable destination);
+}
+```
+
+In the reference implementation these functions are implemented in the abstract contract `StakeManager.sol` from which the entry point inherits. 
+
+### 1.5 Using the paymaster to do some action after the operation is done
+Up to now the paymaster is called during validation and if this succeeds it can pay for gas. But there is more a paymaster can do.
+
+The idea of the paymaster is to make life easier for non-native blockchain users. So if you want the users of your dapp to be able to pay in US$, you could transfer these payments into a stablecoin like USDC. If the paymaster allows to pay for gas in USDC it needs to know how much gas was used in order to calculate how much USDC the user . 
+For example, a paymaster that is allowing users to pay for gas in USDC needs to know how much gas was actually used by the operation so it knows how much USDC to charge.
+
+We add a new hook function `postOp(PostOpMode mode, bytes calldata context, uint256 actualGasCost)` to the paymaster which the entry point contract can call once the operation has been executed.
+
+So how does that work: the entrypoint calls `validatePaymasterOp` on the paymaster contract. The validation will only succeed if there are enough funds available. But there is a hook. There could be the case where the validation succeeds but the execution of the user operation will use up all the funds so that the paymaster has nothing to get paid. There is a simple trick to solve this. If the `postOp` method reverts during execution, the whole transaction will simply revert. In this case we are in the same situation as of before the exection of the user operation. The `postOp` method will then simply be called again and this time it should be able to transfer the funds as we are in the same situation as of before the execution.
+
+The reference implementation does it a little differently. It holds a deposit, which will only be used to pay for gas fees if the inital transfer of funds fails. 
+
+It has an `DepositPaymaster.sol` example, where postOp method looks like this:
+
+```
+    /**
+     * perform the post-operation to charge the sender for the gas.
+     * in normal mode, use transferFrom to withdraw enough tokens from the sender's balance.
+     * in case the transferFrom fails, the _postOp reverts and the entryPoint will call it again,
+     * this time in *postOpReverted* mode.
+     * In this mode, we use the deposit to pay (which we validated to be large enough)
+     */
+    function _postOp(PostOpMode mode, bytes calldata context, uint256 actualGasCost) internal override {
+
+        (address account, IERC20 token, uint256 gasPricePostOp, uint256 maxTokenCost, uint256 maxCost) = abi.decode(context, (address, IERC20, uint256, uint256, uint256));
+        //use same conversion rate as used for validation.
+        uint256 actualTokenCost = (actualGasCost + COST_OF_POST * gasPricePostOp) * maxTokenCost / maxCost;
+        if (mode != PostOpMode.postOpReverted) {
+            // attempt to pay with tokens:
+            token.safeTransferFrom(account, address(this), actualTokenCost);
+        } else {
+            //in case above transferFrom failed, pay with deposit:
+            balances[token][account] -= actualTokenCost;
+        }
+        balances[token][owner()] += actualTokenCost;
+    }
+```
+
 
 
 
