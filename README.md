@@ -8,6 +8,8 @@ To get a firt overview what EIP-4337 is about and what it is used for I found th
  
 But although I understood, why it is there, the reference implementation still was a mystireum to me. To understand it you have to understand the ideas and discussions which have happened over years first.
 
+Vitalik Buterin (@vbuterin), Yoav Weiss (@yoavw), Dror Tirosh (@drortirosh), Shahaf Nacson (@shahafn), Alex Forshtat (@forshtat), Kristof Gazso (@kristofgazso), Tjaden Hess (@tjade273), "ERC-4337: Account Abstraction Using Alt Mempool [DRAFT]," Ethereum Improvement Proposals, no. 4337, September 2021. [Online serial]. Available: https://eips.ethereum.org/EIPS/eip-4337.
+
 # Part I: Creating a wallet which does not need to handle private keys 
 
 ## 1. The ideas behind ERC-4337
@@ -219,6 +221,84 @@ It has an `DepositPaymaster.sol` example, where postOp method looks like this:
 ```
 
 
+# Part III: Creating a smart wallet contract without owning an EOA
+## 1 Requirements for wallet creation
+In part one we have defined how to setup a wallet that can perform tasks onchain without any need of handling private keys of an EOA.
+It simply would not make sense if we needed an EOA now to get our smart wallet account deployed onchain.
+
+Let's see how we achieve the same targets creating a smart wallet account onchain as if we would create an EOA.
+
+1. anyone without an EOA should be able to deploy a smart wallet account onchain either paying with own Eth or letting a paymaster pay for it
+2. like with an EOA, where I can create my private key locally and get an account address before having sent any transaction, the smart wallet account should be setup in the same way
+
+The second requirement can be achieved by using the `CREATE2` opcode which will deterministically calculate an ehtereum address from the following inputs:
+
+New addresses are a function of:
+- 0xFF, a constant that prevents collisions with CREATE
+- The sender’s own address
+- A salt (an arbitrary value provided by the sender)
+- The to-be-deployed contract’s bytecode
+
+This process is called "counterfactual deployments". The function looks like this: `counterfactual_address = hash(0xFF, sender, salt, bytecode)`.
+
+CREATE2 guarantees that if the sender ever deploys bytecode using CREATE2 and the provided salt, it will be stored in `counterfactual_address`.
+As bytecode is part of `counterfactual_address` other participants can rely on the fact that, if a contract is ever deployed to `counterfactual_address`, it will be exactly the one that coresponds to bytecode.
+
+## 2. How to get the wallet onchain
+Now we know about the CREAT2 opcode. The first idea which comes to mind is that 
+1. the user would simply submit a user operation
+2. the user operation should contain some byteCode to setup the smart wallet contract in field called `initCode`
+3. the user operation would passed to the entry point contract via the bundler
+4. the entry point could deploy a new smart wallet account in case of a non-empty `initCode` field as part of the `validateUserOp` method
+
+But in this case the user would submit arbitrary bytecode and pass it to the entry point. The entry point will not be able to validate any kind of bytecode in order to avoid that it is malicious and finally does what its intentional scope was.
+
+To solve this problem we introduce factory contacts to call `CREATE2` for calculating the counterfactual address and to deploy a specific kind of wallet.
+
+In the reference implementation there is a sample factory contract called `simpleAccountFacotry.sol". It contains mainly two methods. The first one calculates the counterfactual address and is implemented as follows:
+
+```
+    /**
+     * calculate the counterfactual address of this account as it would be returned by createAccount()
+     */
+    function getAddress(address owner,uint256 salt) public view returns (address) {
+        return Create2.computeAddress(bytes32(salt), keccak256(abi.encodePacked(
+                type(ERC1967Proxy).creationCode,
+                abi.encode(
+                    address(accountImplementation),
+                    abi.encodeCall(SimpleAccount.initialize, (owner))
+                )
+            )));
+    }
+```
+The second one deploys a smart wallet account which is of type `SimpleAccount`. This refers to the sample implementation of a smart wallet account which you can find in the same folder.
+
+```
+    /**
+     * create an account, and return its address.
+     * returns the address even if the account is already deployed.
+     * Note that during UserOperation execution, this method is called only if the account is not deployed.
+     * This method returns an existing account address so that entryPoint.getSenderAddress() would work even after account creation
+     */
+    function createAccount(address owner,uint256 salt) public returns (SimpleAccount ret) {
+        address addr = getAddress(owner, salt);
+        uint codeSize = addr.code.length;
+        if (codeSize > 0) {
+            return SimpleAccount(payable(addr));
+        }
+        ret = SimpleAccount(payable(new ERC1967Proxy{salt : bytes32(salt)}(
+                address(accountImplementation),
+                abi.encodeCall(SimpleAccount.initialize, (owner))
+            )));
+    }
+``` 
+
+We add a field `initCode` to the user operation. If initCode is not empty, the first 20 bytes will refer to the factory address. The rest can be information which is passed to the factory contract if needed. There can be different kind of factory contracts for different kind of wallets. If the factory contract has been audited, users now can be sure to get that exact kind of smart wallet account they want. 
+
+One last issue to solve: as with paymasters, a deployment could succeed during simulation but fail during exection. This problem is solved in the exact same way as with paymasters. A factory contract either only accesses storage of the wallet it deploys, or bundler will restrict storage and methods a factory contract can access. In this case factory contracts will have to stake Eth in the same way as paymasters have to. 
+
+# IV. Saving gas with aggregate signatures
+The last part is not specific to account abstraction but a more general concept from cryptography to save gas: aggregate signatures.
 
 
 # Part V: Implementation
@@ -254,7 +334,8 @@ pragma solidity ^0.8.12;
 import "./UserOperation.sol";
 
 interface IAccount {
-    function validateUserOp(UserOperation calldata userOp, bytes32 userOpHash, uint256 missingAccountFunds)
+    function validateUserOp(UserOperation calldata use
+    rOp, bytes32 userOpHash, uint256 missingAccountFunds)
     external returns (uint256 validationData);
 }
 ```
