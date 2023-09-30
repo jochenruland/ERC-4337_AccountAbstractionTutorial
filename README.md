@@ -1,14 +1,18 @@
 # ERC-4337 Accout Abstraction Tutorial
-Could not find a good tutorial for those who want to go deeper into the technical details of
+I could not find a good tutorial for those who want to go deeper into the technical details of
 ERC-4337 Account Abstraction and how to use it. So I decided to do one myself.
 
-This is a step-by-step guide to understand first of all the ideas behind EIP-4337 and then the technical implementation of ERC-4337.
+To 
+get a firt overview what EIP-4337 is about and what it is used for I found this article quiete helpful [medium blog post](https://medium.com/blockchain-at-usc/deep-dive-into-account-abstraction-and-eip-4337-scaling-ethereum-ux-from-0-to-1-c2e6da49d226).
 
-To get a firt overview what EIP-4337 is about and what it is used for I found this article quiete helpful [medium blog post](https://medium.com/blockchain-at-usc/deep-dive-into-account-abstraction-and-eip-4337-scaling-ethereum-ux-from-0-to-1-c2e6da49d226).
+This is a step-by-step guide to understand first of all the ideas behind EIP-4337 and how it is implemented.
  
-But although I understood, why it is there, the reference implementation still was a mystireum to me. To understand it you have to understand the ideas and discussions which have happened over years first.
+But although I understood, why it is there, the reference implementation still was a mystireum to me. To understand it you have to understand the ideas and discussions which have taken place for some years first.
 
 Vitalik Buterin (@vbuterin), Yoav Weiss (@yoavw), Dror Tirosh (@drortirosh), Shahaf Nacson (@shahafn), Alex Forshtat (@forshtat), Kristof Gazso (@kristofgazso), Tjaden Hess (@tjade273), "ERC-4337: Account Abstraction Using Alt Mempool [DRAFT]," Ethereum Improvement Proposals, no. 4337, September 2021. [Online serial]. Available: https://eips.ethereum.org/EIPS/eip-4337.
+
+The ERC-4337 reference implementation I'm referring to in this tutorial can be found
+here on [github](https://github.com/eth-infinitism/account-abstraction/tree/main/contracts)
 
 # Part I: Creating a wallet which does not need to handle private keys 
 
@@ -300,13 +304,91 @@ One last issue to solve: as with paymasters, a deployment could succeed during s
 # IV. Saving gas with aggregate signatures
 The last part is not specific to account abstraction but a more general concept from cryptography to save gas: aggregate signatures.
 
+## 1. What is an Aggregator contract
+ERC-4337 supports handling of user operations that use signature aggregators. An Aggregator is a audited helper contract capable of validating an aggregated signature, which means validating mulitple user operations in one batch by verifying only one signature. This reduces gas costs and improves the scalability of the user operation processing. Instead of validating each signature for each user operation the Aggrigator validates multiple user operations in just one step.
+
+The Aggregator interface contains 3 functions:
+
+```
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity ^0.8.12;
+
+import "./UserOperation.sol";
+
+/**
+ * Aggregated Signatures validator.
+ */
+interface IAggregator {
+
+    /**
+     * validate aggregated signature.
+     * revert if the aggregated signature does not match the given list of operations.
+     */
+    function validateSignatures(UserOperation[] calldata userOps, bytes calldata signature) external view;
+
+    /**
+     * validate signature of a single userOp
+     * This method is should be called by bundler after EntryPoint.simulateValidation() returns (reverts) with ValidationResultWithAggregation
+     * First it validates the signature over the userOp. Then it returns data to be used when creating the handleOps.
+     * @param userOp the userOperation received from the user.
+     * @return sigForUserOp the value to put into the signature field of the userOp when calling handleOps.
+     *    (usually empty, unless account and aggregator support some kind of "multisig"
+     */
+    function validateUserOpSignature(UserOperation calldata userOp)
+    external view returns (bytes memory sigForUserOp);
+
+    /**
+     * aggregate multiple signatures into a single value.
+     * This method is called off-chain to calculate the signature to pass with handleOps()
+     * bundler MAY use optimized custom code perform this aggregation
+     * @param userOps array of UserOperations to collect the signatures from.
+     * @return aggregatedSignature the aggregated signature
+     */
+    function aggregateSignatures(UserOperation[] calldata userOps) external view returns (bytes memory aggregatedSignature);
+}
+```
+
+In the reference implementation there is an Example of a smart wallet account using aggregate signatures and a corresponding Aggregator in ./samples/bls/BLSSignatureAggregator.sol.
+BLS stands for Boneh–Lynn–Shacham digital signature. More details on BLS signature can be found [here](https://en.wikipedia.org/wiki/BLS_digital_signature).
+
+If a wallet allows for aggregated signatures, it somehow has to define the corresponding Aggregator contract. In the above mentioned example of an BLS based smart wallet account this is done by using a public variable `aggregator` which is initialized in the constructor.
+
+Knowing the Aggregator's address, the bundler can call the `aggregateSignatures` method which will returnd one signature for a group of user operations with the same Aggregator. Bundlers whitelist the supported aggregators or they might directly hardcode a native version of the signature aggregation algorithm so that aggregation can be directly provided by the bundler.
+
+## 2. How does the entry point handle aggregate signatures 
+The entrypoint contract uses `handleOps` method for validating and executing a list of user operations. In order to handle a group of aggregated user operations it needs a new method called `handleAggregatedOps` which will call the Aggregator's `validateSignatures` method for each group of aggregated user operations.
+
+Last point: as for paymaster contracts and factory contracts we also want to prevent malicious aggregators which might succeed in validation but fail during execution. Therefore once again we restrict the storage it can access and the opcodes it can use and it also has to stake ETH in the entry point.
+
+The example of an BLS based aggregator contract in the reference implementiation can be found in `contracts/samples/bls/BLSSignatureAggregator.sol`. This conctract contains the following function to stake ETH.
+
+```
+    /**
+     * allow staking for this aggregator
+     * there is no limit on stake or delay, but it is not a problem, since it is a permissionless
+     * signature aggregator, which doesn't support unstaking.
+     */
+    function addStake(IEntryPoint entryPoint, uint32 delay) external payable {
+        entryPoint.addStake{value : msg.value}(delay);
+    }
+```
+
+----------------------------------Copied--------------------
+In addition to the standard handling of user operations, the EntryPoint also provides handling for operations submitted by Aggregators. The handleAggregatedOps function is responsible for this, and it performs the same steps as the handleOps function but with some additional considerations.
+
+When handling a batch of operations that contain UserOperations from multiple aggregators (as well as operations without aggregators), the handleAggregatedOps function must transfer the correct Aggregator to each UserOperation, and also call the validateSignatures function on each Aggregator after performing the per-account validation
+
+In addition to the validation step, the Aggregator also provides a guarantee that the UserOperations it has validated will be executed in a timely manner. To do this, the Aggregator stakes its own funds and commits to executing the UserOperations within a specified time range. This ensures that the UserOperations will not be delayed or cancelled, and provides an additional layer of security for the users.
+
+It's worth noting that not all block-builders on the network are required to be bundlers, and that bundlers/clients whitelist the supported aggregators. This allows users to choose the Aggregator that best fits their needs and provides the highest level of security and efficiency.
+
+
 
 # Part V: Implementation
 ## 2. How it is implemented
 Overview on why it is implemented as it is -> https://www.alchemy.com//blog/account-abstraction  
 
-The ERC-4337 reference implementation I'm referring to in this tutorial you will find
- here on [github](https://github.com/eth-infinitism/account-abstraction/tree/main/contracts)
+
 
 For me as a developer who has not been in the long history of dicussions about account abstraction which has taken place since 2016, the concept
 and its implementation solves so many issues that is not obvious at first sight which part of the reference implementations serves which goals.
